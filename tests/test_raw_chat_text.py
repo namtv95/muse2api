@@ -111,6 +111,50 @@ def test_hot_tab_previous_reply_is_baseline():
     assert "".join(chunks) == "new\t<b>z</b>", chunks
 
 
+class TimedPage:
+    """按假时钟给出 poll 结果：fn(t) -> dict。"""
+    def __init__(self, fn):
+        self.fn = fn
+
+    def js(self, expr, *a, **k):
+        if expr == m.MuseEngine._POLL_CHAT_JS:
+            return json.dumps(self.fn(clock[0]))
+        return ""
+
+
+def timed_engine(fn):
+    clock[0] = 0.0
+    e = make_engine([poll(None, "", False, cnt=0)])
+    e.page = TimedPage(fn)
+    return e
+
+
+def test_long_thinking_with_stop_button_waits_past_40s():
+    """长提示词：模型思考 ~55s 才出首字，期间 Stop 按钮一直在（实测 request_0008）。不得 40s 判超时。"""
+    def fn(t):
+        if t < 1:
+            return poll(None, "", False, cnt=0)
+        if t < 55:   # 思考中：助手气泡已出现但为空，Stop 在
+            return poll(None, "", True, cnt=0)
+        if t < 57:
+            return poll(RAW[:10], INNER[:8], True)
+        return poll(RAW, INNER, False)
+    out = "".join(timed_engine(fn).chat_stream({}, "p"))
+    assert out == RAW, repr(out)
+
+
+def test_no_stop_button_still_times_out_at_40s():
+    """没有 Stop 按钮（消息没发出去 / 卡住）仍在约 40s 判首字超时，不拖到总超时。"""
+    e = timed_engine(lambda t: poll(None, "", False, cnt=0))
+    try:
+        list(e.chat_stream({}, "p"))
+    except m.MuseGenerationError as exc:
+        assert "首字" in str(exc)
+        assert 39 <= clock[0] <= 46, clock[0]
+    else:
+        raise AssertionError("expected first-token timeout")
+
+
 def test_poll_js_reads_fiber_msg_content():
     js = m.MuseEngine._POLL_CHAT_JS
     assert "__reactFiber$" in js and "memoizedProps" in js and ".content" in js

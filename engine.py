@@ -1465,6 +1465,8 @@ class MuseEngine:
             pass
         return 0, "", False
 
+    _FIRST_TOKEN_STOP_GRACE = 5.0
+
     def chat_stream(self, cookies: dict, prompt: str, expires: dict | None = None,
                     timeout: int | None = None, account_id: str | None = None,
                     stop_event=None):
@@ -1481,12 +1483,22 @@ class MuseEngine:
         sent, last, stable = "", None, 0
         got_first = False
 
+        # 长提示词时模型会先“思考”30~60s 才出首字，期间助手气泡为空但 Stop 按钮一直在。
+        # 40s 首字上限只用于“看不到生成迹象”（消息没发出去 / VM 卡住）；Stop 按钮在（或刚消失
+        # 不到 _FIRST_TOKEN_STOP_GRACE 秒，渲染切换时会闪一下）就继续等，直到总超时 deadline。
+        last_stop_at = None
+
         # 1. 等待助手生成并开始吐字（高频 60ms 采样，捕获到首批增量文字瞬间 yield 出去）
-        while time.time() < first_token_deadline:
+        while time.time() < deadline and (
+                time.time() < first_token_deadline
+                or (last_stop_at is not None
+                    and time.time() - last_stop_at < self._FIRST_TOKEN_STOP_GRACE)):
             if stop_event is not None and stop_event.is_set():
                 return
             time.sleep(0.06)
             cnt, cur, has_stop = self._poll_chat()
+            if has_stop:
+                last_stop_at = time.time()
             if not cur or (cnt <= base_agent and cur == base_text):
                 if time.time() - t_sent > 14.0:
                     try:
