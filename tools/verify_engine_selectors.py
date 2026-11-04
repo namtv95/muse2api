@@ -57,6 +57,18 @@ def main():
         print("=== button[aria-label] on page ===")
         print(labels)
 
+        # 0b) 助手回复原文（React fiber msg.content）vs 渲染后 innerText
+        raw = c.js(E.MuseEngine._AGENT_TEXT_JS)
+        inner = c.js("""(function(){var bs=[].slice.call(document.querySelectorAll(%s))
+            .filter(function(b){return %s.test(b.className||'');});
+            return bs.length?(bs[bs.length-1].innerText||''):null;})()""" % (
+            E.MuseEngine._BUBBLE_SEL_JS, E.MuseEngine._AGENT_BUBBLE_RE_JS))
+        print("\n=== 最后一条助手回复 ===")
+        print("raw      :", repr((raw or "")[:300]))
+        print("innerText:", repr((inner or "")[:300]))
+        if inner and raw == inner:
+            print("  !! raw 与 innerText 相同：可能没取到原文（看 engine._RAW_TEXT_FN_JS）")
+
         # 1) engine._ATT_JS
         atts = e.attachments()
         print(f"\n=== engine.attachments() -> {len(atts)} ===")

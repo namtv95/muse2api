@@ -1358,53 +1358,74 @@ class MuseEngine:
     """
 
     # ---------------- 文本 / 代码对话 ----------------
+    # 网页把模型的 markdown 渲染成 HTML，innerText 会丢 TAB、折叠空白、吞掉 <Bold>..</> / <b> 这类标签。
+    # 模型原文（markdown 源码，逐字节）挂在气泡祖先组件的 React fiber 上：
+    #   memoizedProps.msg = {role:'assistant', content:<原文>, isTextStreaming, ...}
+    # 现网实测（2026-11）：content 只追加不改写，并且比 DOM 渲染更早到齐。
+    # 选择器集中在这里；tools/verify_engine_selectors.py 复用同一段 JS 对现网页面做核对。
+    _BUBBLE_SEL_JS = "'div[class*=\"hatch-chat-groupable-bubble\"]'"
+    _AGENT_BUBBLE_RE_JS = "/hatch-agent-bubble-bg/"
+    _RAW_FIBER_DEPTH = 120
+    # function __museRaw(el) -> 原文字符串；拿不到（React 内部结构变化等）返回 null，调用方回退 innerText
+    _RAW_TEXT_FN_JS = (
+        "function __museRaw(el){try{"
+        "var fk=Object.keys(el).find(function(k){return k.indexOf('__reactFiber$')===0;});"
+        "var f=fk?el[fk]:null;"
+        "for(var i=0;f&&i<" + str(_RAW_FIBER_DEPTH) + ";i++,f=f.return){"
+        "var p=f.memoizedProps,g=p&&p.msg;"
+        "if(g&&typeof g.content==='string'&&g.role==='assistant')return g.content;}"
+        "}catch(e){}return null;}"
+    )
     _AGENT_TEXT_JS = (
-        "(function(){"
-        "var bs=[].slice.call(document.querySelectorAll("
-        "'div[class*=\"hatch-chat-groupable-bubble\"]'));"
+        "(function(){" + _RAW_TEXT_FN_JS +
+        "var bs=[].slice.call(document.querySelectorAll(" + _BUBBLE_SEL_JS + "));"
         "for(var i=bs.length-1;i>=0;i--){"
         "var cs=bs[i].className||'';"
-        "if(/hatch-agent-bubble-bg/.test(cs))return bs[i].innerText||'';}"
+        "if(" + _AGENT_BUBBLE_RE_JS + ".test(cs)){var r=__museRaw(bs[i]);"
+        "return r!==null?r:(bs[i].innerText||'');}}"
         "return '';})()"
     )
     _USER_COUNT_JS = (
         "(function(){"
-        "var bs=[].slice.call(document.querySelectorAll("
-        "'div[class*=\"hatch-chat-groupable-bubble\"]'));"
+        "var bs=[].slice.call(document.querySelectorAll(" + _BUBBLE_SEL_JS + "));"
         "var n=0;for(var i=0;i<bs.length;i++){"
         "if(/chat-user-bubble/.test(bs[i].className||''))n++;}"
         "return String(n);})()"
     )
     _AGENT_COUNT_JS = (
         "(function(){"
-        "var bs=[].slice.call(document.querySelectorAll("
-        "'div[class*=\"hatch-chat-groupable-bubble\"]'));"
+        "var bs=[].slice.call(document.querySelectorAll(" + _BUBBLE_SEL_JS + "));"
         "var n=0;for(var i=0;i<bs.length;i++){"
-        "if(/hatch-agent-bubble-bg/.test(bs[i].className||''))n++;}"
+        "if(" + _AGENT_BUBBLE_RE_JS + ".test(bs[i].className||''))n++;}"
         "return String(n);})()"
     )
+    # 返回 {cnt,total,txt,raw,stop}：txt = 最后一个非空助手气泡的 innerText（兜底），
+    # raw = 同一气泡的模型原文（取不到为 null）。非空判定按 raw（有则用）否则 innerText，保证 cnt 与 txt/raw 一致。
     _POLL_CHAT_JS = (
-        "(function(){"
+        "(function(){" + _RAW_TEXT_FN_JS +
         "var els=[...document.querySelectorAll('*')].filter(function(e){"
         "var s=getComputedStyle(e);"
         "return (s.overflowY==='auto'||s.overflowY==='scroll')&&e.scrollHeight>e.clientHeight+100;});"
         "els.sort(function(a,b){return b.scrollHeight-a.scrollHeight;});"
         "if(els[0])els[0].scrollTop=els[0].scrollHeight;"
         "var scope=document.querySelector('main,[class*=\"chat-scroll\"],[class*=\"hatch-chat-scroll\"]')||document.body;"
-        "var bs=[].slice.call(scope.querySelectorAll('div[class*=\"hatch-chat-groupable-bubble\"]'))"
-        ".filter(function(b){return /hatch-agent-bubble-bg/.test(b.className||'');});"
-        "var nonEmpty=bs.filter(function(b){return ((b.innerText||'').trim().length)>0;});"
-        "var txt=nonEmpty.length?(nonEmpty[nonEmpty.length-1].innerText||'').trim():'';"
+        "var bs=[].slice.call(scope.querySelectorAll(" + _BUBBLE_SEL_JS + "))"
+        ".filter(function(b){return " + _AGENT_BUBBLE_RE_JS + ".test(b.className||'');});"
+        "var items=bs.map(function(b){return {raw:__museRaw(b),txt:(b.innerText||'')};})"
+        ".filter(function(x){return ((x.raw!==null?x.raw:x.txt).trim().length)>0;});"
+        "var last=items.length?items[items.length-1]:null;"
+        "var txt=last?last.txt.trim():'';"
+        "var raw=last?last.raw:null;"
         "var stop=!!(document.querySelector('[data-testid=\"hatch-composer-stop-button\"]')"
         "||document.querySelector('button[aria-label*=\"Stop\" i]')"
         "||document.querySelector('button[aria-label*=\"停止\"]'));"
-        "return JSON.stringify({cnt:nonEmpty.length,total:bs.length,txt:txt,stop:stop});})()"
+        "return JSON.stringify({cnt:items.length,total:bs.length,txt:txt,raw:raw,stop:stop});})()"
     )
 
     def _agent_text(self) -> str:
         """最后一个助手气泡的文本（取不到就返回空串）。"""
         try:
-            return (self.page.js(self._AGENT_TEXT_JS) or "").strip()
+            return self.page.js(self._AGENT_TEXT_JS) or ""
         except Exception:  # noqa: BLE001
             return ""
 
@@ -1420,12 +1441,26 @@ class MuseEngine:
         except Exception:  # noqa: BLE001
             return 0
 
+    _raw_fallback_warned = False
+
     def _poll_chat(self) -> tuple[int, str, bool]:
+        """(非空助手气泡数, 最后一条回复文本, Stop 按钮是否在)。
+        回复文本优先用模型原文 raw（逐字节，不 strip：TAB / 前导空格 / 标签都保留），
+        取不到时回退渲染后的 innerText（会丢 TAB 与 HTML 类标签），并只告警一次。"""
         try:
-            raw = self.page.js(self._POLL_CHAT_JS)
-            if raw:
-                d = json.loads(raw)
-                return int(d.get("cnt") or 0), (d.get("txt") or "").strip(), bool(d.get("stop"))
+            res = self.page.js(self._POLL_CHAT_JS)
+            if res:
+                d = json.loads(res)
+                cnt, stop = int(d.get("cnt") or 0), bool(d.get("stop"))
+                raw = d.get("raw")
+                if isinstance(raw, str):
+                    return cnt, raw, stop
+                txt = (d.get("txt") or "").strip()
+                if txt and not MuseEngine._raw_fallback_warned:
+                    MuseEngine._raw_fallback_warned = True
+                    log.warning("取不到助手回复原文（React fiber msg.content），回退 innerText："
+                                "TAB 与 <Bold> 等标签会丢失；请用 tools/verify_engine_selectors.py 核对页面结构")
+                return cnt, txt, stop
         except Exception:
             pass
         return 0, "", False

@@ -441,6 +441,17 @@ python tests/test_media_selection.py
 禁止全局下载回退，以及参考图读取失败时中止。最终图片编辑效果仍需通过真实接口验收。
 
 
+## 对话回复取模型原文（TAB / 标签不丢）
+
+网页把模型的 markdown 渲染成 HTML，渲染后的 `innerText` 会丢 TAB、折叠空白、吞掉 `<Bold>..</>`、`<b>` 这类标签。
+对话回复（`/v1/chat/completions`、`/v1/responses`，含 `stream=true`）现在读气泡 React fiber 上的
+`msg.content`（模型原文，逐字节，不再 strip 首尾空白）；取不到时回退 `innerText` 并在日志告警一次。
+页面结构变化后用 `python3 tools/verify_engine_selectors.py` 对比原文与 `innerText`。
+
+```bash
+python tests/test_raw_chat_text.py
+```
+
 ## v1.5.2：反向代理/CDN 后的长耗时生图
 
 同步 OpenAI 图片接口仍保留兼容，但 CDN/客户端可能在生成结束前截断长请求。
