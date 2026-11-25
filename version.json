@@ -1,23 +1,13 @@
 {
-  "version": "1.6.11",
-  "updated_at": "2026-11-15",
+  "version": "1.6.14",
+  "updated_at": "2026-11-24",
   "repo": "https://github.com/czg86389-hub/muse2api",
   "highlights": [
-    "修复工作区暂未分配时丢弃新 Cookie 的问题；保存轮换后的登录态，但不把未确认会话标成成功。",
-    "浏览器插件升级至 1.0.3：按当前普通/无痕窗口读取 Cookie，避免导入另一个窗口的账号；找不到存储区时停止导入。",
-    "图片和视频采用独立排队时限（默认 3600 秒，0 为不限）；排队不消耗生成预算，失败记录保留账号、尝试次数和原始错误。",
-    "检查更新只读：如实区分本地版本/提交与远端状态；有更新时提醒，由管理员手动确认升级，任务排队或运行期间拒绝更新。",
-    "媒体库只加载视频缩略图，点击后才加载所选视频，关闭预览释放播放器；源部署需 FFmpeg，Docker 用户请重建镜像。",
-    "组合修复聊天与媒体的资源获取顺序、排队设置跨域 PUT 和固定提交版本读取；继续保留独立代理、轮询及会话健康检查。",
-    "请先更新服务，再手动升级插件 1.0.3：替换原目录并重新加载；每个浏览器个人资料分别升级，无痕模式还需允许扩展运行。油猴脚本仍为 1.1.2。"
+    "1.6.14：muse.ai 过载时视频更快出结果。muse.ai 过载时，一次失败的视频要等 6~7 分钟才会说“503”，再换号重试又是一轮。现在只要最近 20 分钟内出现过过载回复，新的视频任务会同时在 2 个空闲账号上生成，先出片者为准，另一路立即取消（不记为账号异常、不再重试）。",
+    "muse.ai 正常时行为不变（单账号）；图片任务、指定账号的任务不并行。代价：过载期间每个视频消耗 2 个账号的额度。可用 MUSE2API_VIDEO_HEDGE=0 关闭，MUSE2API_VIDEO_HEDGE_WINDOW 调整时长。服务重启后会从最近的任务记录恢复并行状态。无需升级浏览器插件。"
   ],
   "highlights_en": [
-    "Preserve cookies rotated by unassigned-workspace responses without marking an unconfirmed session healthy.",
-    "Extension 1.0.3 reads the active regular/incognito window cookie store and stops instead of importing from another store when identification fails.",
-    "Image/video queue waits have a separate budget (3600 seconds by default; 0 means unlimited). Failed tasks retain account, attempt and original error.",
-    "Update checks are read-only and report installed provenance separately. Updates notify administrators and require explicit confirmation; queued/running work blocks upgrades.",
-    "The media library lazily loads video thumbnails and requests a video only on playback. Source deployments need FFmpeg; Docker users should rebuild images.",
-    "Integration fixes align chat/media resource acquisition, allow queue-setting PUT preflights and bind remote version metadata to one commit.",
-    "Update the service, then manually upgrade extension 1.0.3 in every browser profile by replacing files and reloading. Allow the extension in Incognito/InPrivate when needed. Userscript remains 1.1.2."
+    "1.6.14: faster videos while muse.ai is overloaded. A failed video turn takes 6-7 minutes before muse.ai reports the 503, and the retry is another full round. For 20 minutes after any overload reply, new video tasks now run on two idle accounts at once; the first finished video wins and the other attempt is cancelled at once (not booked as an account fault, not retried).",
+    "Nothing changes while muse.ai is healthy (one account); image tasks and tasks pinned to an account never run in parallel. Cost: during an overload each video uses two accounts' allowance. MUSE2API_VIDEO_HEDGE=0 turns it off, MUSE2API_VIDEO_HEDGE_WINDOW sets the duration. After a restart the state is restored from recent task records. No extension upgrade is needed."
   ]
 }
