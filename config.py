@@ -62,6 +62,14 @@ def _detect_chromium() -> str:
     return configured or "chromium"
 
 
+# The fresh-work message sent first in every new text chat (owner's wording; an instruction, it deletes no saved memory)
+FRESH_PREAMBLE = (
+    "Làm việc hoàn toàn fresh trong phạm vi chat này. Không dùng dữ liệu đã lưu, không tìm bộ nhớ hay các cuộc trò "
+    "chuyện cũ, không dùng file workspace, goal hay nội dung từ các đoạn chat khác, trừ khi tôi ngay trong chat này "
+    "yêu cầu rõ ràng. Chỉ dùng nội dung tôi cung cấp trực tiếp trong chat này. Nếu nội dung trong chat này mâu thuẫn "
+    "với dữ liệu đã lưu, ưu tiên nội dung trong chat này.")
+
+
 @dataclass
 class Config:
     base_dir: str = field(default_factory=lambda: _env("MUSE2API_HOME", _DEFAULT_BASE_DIR))
@@ -102,6 +110,10 @@ class Config:
     image_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_IMAGE_TIMEOUT", "240")))
     video_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_VIDEO_TIMEOUT", "600")))
     chat_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_CHAT_TIMEOUT", "300")))
+    # each text request in a new thread, the fresh-work message first (MUSE2API_FRESH_CHAT=0: the old reuse)
+    fresh_chat: bool = field(default_factory=lambda: _env("MUSE2API_FRESH_CHAT", "1").strip().lower()
+                             not in ("0", "false", "no", "off"))
+    fresh_preamble: str = field(default_factory=lambda: _env("MUSE2API_FRESH_PREAMBLE", FRESH_PREAMBLE))
     max_concurrency: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_CONCURRENCY", "8"))))
 
     # 参考图输入默认只允许调用方直接提供数据和公网 URL。

@@ -1596,9 +1596,23 @@ class MuseEngine:
                     timeout: int | None = None, account_id: str | None = None,
                     stop_event=None):
         """发一条消息，流式 yield 增量文本。"""
+        # fresh_chat (default on): every request opens a new /thread/new - the old reuse of an open thread with < 24
+        # bubbles let ~12 requests in a row share one conversation, so later answers saw earlier ones.
+        # fresh_preamble: sent first as its own message in that thread (its reply is read and dropped), then the prompt.
         timeout = int(timeout or getattr(self.cfg, "chat_timeout", 300))
         self.ensure_page(cookies, expires, account_id=account_id)
-        self.reset_thread(for_chat=True)
+        fresh = getattr(self.cfg, "fresh_chat", True)
+        self.reset_thread(for_chat=not fresh)
+        preamble = (getattr(self.cfg, "fresh_preamble", "") or "").strip() if fresh else ""
+        if preamble:
+            for _ in self._stream_reply(preamble, timeout, stop_event):
+                pass
+            if stop_event is not None and stop_event.is_set():
+                return
+        yield from self._stream_reply(prompt, timeout, stop_event)
+
+    def _stream_reply(self, prompt: str, timeout: int, stop_event=None):
+        """Send one message in the current thread and yield its reply's new text (the old chat_stream body)."""
         base_agent, base_text, _ = self._poll_chat()
         self._send(prompt)
 
