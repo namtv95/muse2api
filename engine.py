@@ -746,6 +746,30 @@ class MuseEngine:
             time.sleep(0.1)
         return False
 
+    _STUCK_HYDRATION_JS = """(function(){
+        var h = document.querySelector('[data-hatch-shell-hydration-state]');
+        return document.readyState === 'complete' && !!h && h.getAttribute('data-hatch-shell-hydration-state') === 'server';
+    })()"""
+    _HYDRATION_WAIT = 15.0
+
+    def _wait_page_ready(self, page: CDP) -> bool:
+        """Wait up to login_wait for a new page; one still un-hydrated after 15 s (loaded, but muse's script never
+        started: it stays so for the whole wait) is loaded again. A page slow for another reason is left alone."""
+        deadline = time.time() + self.cfg.login_wait
+        while True:
+            left = deadline - time.time()
+            if self._wait_ws_ready(page, timeout=min(left, self._HYDRATION_WAIT)):
+                return True
+            if deadline - time.time() <= 0.5:
+                return False
+            try:
+                stuck = page.js(self._STUCK_HYDRATION_JS)
+            except Exception:  # noqa: BLE001
+                stuck = False
+            if stuck:
+                log.warning("页面卡在 hydration=server，重新加载")
+                page.send("Page.navigate", {"url": "https://muse.ai/thread/new"})
+
     def reset_thread(self, for_chat: bool = False):
         """关闭残留弹窗并确保处于干净会话且 WebSocket 已就绪。
         对于纯文本对话（for_chat=True），若当前热页面无附件、无卡死且气泡数较少，直接复用现有热连接以实现 2s 级秒回。"""
@@ -851,11 +875,12 @@ class MuseEngine:
         self._ensure_local().proxy_config = proxy
         self._apply_cookies(page, cookies, expires)
         page.send("Page.navigate", {"url": "https://muse.ai/thread/new"})
-        if self._wait_ws_ready(page, timeout=self.cfg.login_wait):
+        if self._wait_page_ready(page):
             self.current_acc_id = account_id
             return page
+        log.warning("页面未就绪 %ss: page=%s", self.cfg.login_wait, self._page_state())
         try:
-            body = (page.js("document.body ? document.body.innerText.slice(0,1200) : ''") or "").lower()
+            body =(page.js("document.body ? document.body.innerText.slice(0,1200) : ''") or "").lower()
         except Exception:
             body = ""
         self._close_page()
@@ -1703,6 +1728,7 @@ class MuseEngine:
         try:
             path = p.js("location.pathname") or ""
             if not path.startswith("/thread/") or path.rstrip("/").endswith("/new"):
+                log.warning("删除对话跳过: no thread open, path %s", path)
                 return False
             if not self._wait_js(p, self._ROW_MENU_JS, 1.0) and not self._open_side_list(p, path):
                 log.warning("删除对话未完成: no row for %s in the side chat list, now %s", path, p.js("location.pathname"))
@@ -1722,10 +1748,29 @@ class MuseEngine:
             log.warning("删除对话失败 %s", e)
             return False
 
+    def _page_state(self) -> str:
+        """Counts and flags of the chat page for a failure log line; no chat text."""
+        try:
+            return self.page.js("""(function(){
+                var ta = document.querySelector('textarea'), b = document.body ? document.body.innerText : '';
+                var flags = ['Still sending', 'Connecting', 'Reconnecting', 'Failed to send', 'Try again', 'limit',
+                    'Something went wrong', 'Waking', 'Starting'].filter(function(x){ return b.indexOf(x) !== -1; });
+                return JSON.stringify({path: location.pathname, ready: document.readyState, ta: ta ? ta.value.length : -1,
+                    bubbles: document.querySelectorAll('div[class*="hatch-chat-groupable-bubble"]').length,
+                    stop: !!document.querySelector('[data-testid="hatch-composer-stop-button"]'),
+                    dialogs: document.querySelectorAll('[role=dialog],[role=alertdialog]').length, flags: flags,
+                    hydration: (document.querySelector('[data-hatch-shell-hydration-state]') || {getAttribute: function(){ return 'none'; }})
+                        .getAttribute('data-hatch-shell-hydration-state'), taOff: !!(ta && ta.disabled), bodyChars: b.length,
+                    scripts: document.scripts.length, stuck: performance.getEntriesByType('resource').filter(function(r){
+                        return r.responseEnd === 0; }).length, resources: performance.getEntriesByType('resource').length});
+            })()""") or ""
+        except Exception as e:  # noqa: BLE001
+            return "unreadable: " + type(e).__name__
+
     def _stream_reply(self, prompt: str, timeout: int, stop_event=None):
         """Send one message in the current thread and yield its reply's new text (the old chat_stream body)."""
         base_agent, base_text, _ = self._poll_chat()
-        self._send(prompt)
+        how = self._send(prompt)
 
         t_sent = time.time()
         deadline = t_sent + timeout
@@ -1768,6 +1813,8 @@ class MuseEngine:
                 break
 
         if not got_first:
+            log.warning("首字超时 %.0fs: send=%s prompt_chars=%d base_bubbles=%d page=%s", time.time() - t_sent, how,
+                        len(prompt), base_agent, self._page_state())
             raise MuseGenerationError("等待助手首字响应超时")
 
         # 2. 持续捕获增量文本
