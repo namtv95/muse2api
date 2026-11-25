@@ -1,4 +1,4 @@
-"""Offline regression: every text chat opens a new thread and sends the fresh-work preamble first.
+"""Offline regression: every text chat opens a new thread; a fresh_preamble, when set, goes first.
 
 Run: python tests/test_fresh_chat.py [path/to/engine.py]; no account, network or Chromium.
 Before: reset_thread(for_chat=True) kept typing into the open thread while it had < 24 bubbles, so up to ~12
@@ -69,7 +69,8 @@ def test_fresh_off_keeps_the_old_flow():
 def test_the_config_defaults_are_fresh():
     import config
     c = config.Config()
-    assert c.fresh_chat is True and c.fresh_preamble.startswith("Làm việc hoàn toàn fresh"), c.fresh_preamble[:40]
+    # no preamble by default (measured 2026-11-25: same re-send noise and no leak without it, ~20 s faster)
+    assert c.fresh_chat is True and c.fresh_preamble == "", c.fresh_preamble[:40]
 
 
 if __name__ == "__main__":
