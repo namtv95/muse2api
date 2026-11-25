@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home()) as home:
     assert m['bodyWidth']<=width+1,'Page overflows the viewport'
     if width>=1280:assert m['tableScroll']<=m['tableWidth']+1,'Desktop account controls need horizontal scrolling'
     assert m['noteDisplay']=='table-cell' and m['noteWhiteSpace']=='normal','Notes must retain table-cell layout and wrap'
-    assert m['buttons']==8
+    assert m['buttons']==9
     if width==1920 and not args.probe_only and args.screenshots:
      page.js("document.querySelector('#poolBody').scrollIntoView({block:'end'})")
      image=page.send('Page.captureScreenshot',{'format':'png'})

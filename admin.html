@@ -941,6 +941,8 @@ const I18N_EN = {
   "状态": "Status",
   "有效期": "Expires",
   "额度": "Quota",
+  "重置Muse": "Reset Muse",
+  "永久删除该账号在 muse.ai 上的聊天、文件、空间和任务": "Permanently delete this account's chats, files, spaces and tasks on muse.ai",
   "启用": "Enable",
   "最后使用": "Last used",
   "备注": "Notes",
@@ -1786,6 +1788,7 @@ async function loadPool(){
           <button class="ghost mini" onclick="toggleAcc('${a.id}', ${!a.enabled})">${a.enabled ? '禁用' : '启用'}</button>
           <button class="ghost mini" onclick="renameAcc('${a.id}','${esc(a.label)}')">改名</button>
           <button class="ghost mini" onclick="updateCookies('${a.id}')">更新Cookie</button>
+          <button class="danger mini" onclick="resetMuse('${a.id}', this)" title="永久删除该账号在 muse.ai 上的聊天、文件、空间和任务">重置Muse</button>
           <button class="danger mini" onclick="delAcc('${a.id}','${esc(a.label)}')">删除</button>
         </div></td>
       </tr>`;
@@ -1983,6 +1986,22 @@ async function updateCookies(id){
   }catch(e){ toast('更新失败：' + e.message, 'bad'); }
 }
 
+async function resetMuse(id, btn){
+  const label = (accounts.find(a => a.id === id) || {}).label || id;
+  const name = prompt(LANG === 'en'
+    ? `Reset Muse for account "${label}"?\n\nIts chats, files, spaces and running tasks on muse.ai are permanently deleted. This cannot be undone.\n\nType Muse to confirm:`
+    : `重置账号「${label}」的 Muse？\n\n该账号在 muse.ai 上的聊天记录、文件、空间和进行中的任务将被永久删除，无法撤销。\n\n输入 Muse 确认：`, '');
+  if (name === null || !name.trim()) return;
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = LANG === 'en' ? 'Resetting…' : '重置中…';
+  try{
+    await api(`/admin/accounts/${id}/reset`, {method:'POST', body: JSON.stringify({name: name.trim()})});
+    toast(LANG === 'en' ? `Muse was reset for "${label}"` : `账号「${label}」已重置`, 'ok'); loadPool();
+  }catch(e){
+    toast((LANG === 'en' ? 'Reset failed: ' : '重置失败：') + e.message, 'bad');
+    btn.disabled = false; btn.textContent = old;
+  }
+}
 async function delAcc(id, label){
   if (!confirm(`确定删除账号「${label}」？此操作不可撤销。`)) return;
   try{

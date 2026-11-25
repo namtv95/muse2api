@@ -2360,6 +2360,45 @@ def relogin(_=Depends(auth)):
 
 
 # ------------------------- 管理：额度 -------------------------
+class ResetReq(BaseModel):
+    name: str = ""
+    dry: bool = False
+
+
+@app.post("/admin/accounts/{aid}/reset")
+async def reset_account(aid: str, req: ResetReq, _=Depends(auth)):
+    """Reset this account's Muse by hand: deletes its chats, files, spaces and tasks for good. name: the agent name the
+    person typed (muse checks it). dry: open the confirm dialog only. 409 while the account is in use."""
+    if not req.dry and not req.name.strip():
+        raise HTTPException(400, "Type the agent name to confirm the reset")
+    acc = store.get_account(aid)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    if not acc.get("cookies"):
+        raise HTTPException(400, "该账号没有 cookie")
+
+    def _run():
+        with GEN_LOCK, _account_operation(aid):
+            engine.start()
+            acc = _renew_and_persist(aid) or store.get_account(aid)
+            res = engine.reset_muse(acc["cookies"], acc.get("cookies_exp"), account_id=aid,
+                                    name=req.name.strip(), dry=req.dry)
+            if not req.dry:
+                log.warning("账号 %s 已重置 Muse（聊天/文件/空间/任务已永久删除）", aid)
+                _renew_and_persist(aid, force=True)      # the reset gives a new VM
+            return res
+
+    try:
+        return await asyncio.to_thread(_run)
+    except HTTPException:
+        raise
+    except MuseAuthError as exc:
+        store.mark(aid, False, str(exc)[:200])
+        raise HTTPException(401, str(exc)) from exc
+    except MuseGenerationError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
 @app.post("/admin/accounts/{aid}/quota")
 async def query_quota(aid: str, _=Depends(auth)):
     """打开 muse.ai 的 Settings 面板读该账号的额度（实时），并缓存到账号记录。

@@ -1018,6 +1018,87 @@ class MuseEngine:
         finally:
             self._close_page()
 
+    # ---------------- Reset Muse (Settings -> Data controls -> Reset), by hand from the admin page only ----------------
+    _RESET_TOP_JS = r"""(() => {
+        const visible = e => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+        const ds = [...document.querySelectorAll('[role=dialog],[role=alertdialog],[aria-modal=true]')].filter(visible);
+        const d = ds[ds.length - 1];
+        if (!d) return '';
+        const name = e => (e.innerText || e.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
+        return JSON.stringify({dialogs: ds.length, inputs: d.querySelectorAll('input,textarea').length,
+            hint: [...d.querySelectorAll('input')].map(i => (i.placeholder || i.getAttribute('aria-label') || '').slice(0, 40)),
+            buttons: [...d.querySelectorAll('button,[role=tab],[role=button],[role=menuitem],a')].filter(visible)
+                .map(e => name(e).slice(0, 50) + (e.disabled || e.getAttribute('aria-disabled') === 'true' ? ' (off)' : ''))
+                .filter(t => t && !t.includes('@')).slice(0, 40)});
+    })()"""
+
+    _RESET_CLICK_JS = r"""((re) => {
+        const visible = e => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+        const ds = [...document.querySelectorAll('[role=dialog],[role=alertdialog],[aria-modal=true]')].filter(visible);
+        const d = ds[ds.length - 1];
+        if (!d) return null;
+        const b = [...d.querySelectorAll('button,[role=tab],[role=button],[role=menuitem],a')].find(e => visible(e) && !e.disabled
+            && e.getAttribute('aria-disabled') !== 'true' && re.test((e.innerText || e.getAttribute('aria-label') || '').trim()));
+        if (!b) return null;
+        b.scrollIntoView({block: 'center'});
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)});
+    })(%s)"""
+
+    _RESET_NAME_JS = r"""((name) => {
+        const visible = e => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+        const ds = [...document.querySelectorAll('[role=dialog],[role=alertdialog],[aria-modal=true]')].filter(visible);
+        const i = ds.length && ds[ds.length - 1].querySelector('input');
+        if (!i) return false;
+        i.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, name);
+        i.dispatchEvent(new Event('input', {bubbles: true}));
+        i.dispatchEvent(new Event('change', {bubbles: true}));
+        return i.value === name;
+    })(%s)"""
+
+    _RESET_TAB = r"/^(data controls?|数据控制|資料控制|数据管理)$/i"
+    _RESET_OPEN = r"/^(reset( muse| agent)?|重置.{0,8}|重設.{0,8})$/i"
+    _RESET_CONFIRM = r"/^(confirm reset|reset( muse| agent)?|确认重置|確認重設)$/i"
+
+    def reset_muse(self, cookies: dict, expires: dict | None = None, account_id: str | None = None,
+                   name: str = "", dry: bool = False) -> dict:
+        """Reset one account's Muse: permanently deletes its chats, files, spaces and tasks. The person types the agent
+        name; muse itself checks it (its button stays off for a wrong one). dry: stop at the confirm dialog."""
+        self._close_page()
+        try:
+            self.ensure_page(cookies, expires, account_id=account_id)
+            self._quota_click(self._QUOTA_SETTINGS_JS, "reset: Settings button not found")
+            self._quota_click(self._QUOTA_MENU_JS, "reset: Settings menu item not found")
+            for step, regex in (("Data controls", self._RESET_TAB), ("Reset", self._RESET_OPEN)):
+                try:
+                    self._quota_click(self._RESET_CLICK_JS % regex, step, timeout=12.0)
+                except MuseGenerationError:
+                    raise MuseGenerationError("reset: no '%s' control; dialog %s" % (step, self.page.js(self._RESET_TOP_JS)))
+                time.sleep(1.0)
+            deadline = time.monotonic() + 8.0
+            while True:
+                top = json.loads(self.page.js(self._RESET_TOP_JS) or "{}")
+                if top.get("inputs"):
+                    break
+                if time.monotonic() >= deadline:
+                    raise MuseGenerationError("reset: no name box; dialog %s" % json.dumps(top, ensure_ascii=False))
+                time.sleep(0.2)
+            if dry:
+                return {"ok": True, "dry": True, "dialog": top}
+            if not self.page.js(self._RESET_NAME_JS % json.dumps(name)):
+                raise MuseGenerationError("reset: the name could not be typed")
+            try:
+                self._quota_click(self._RESET_CLICK_JS % self._RESET_CONFIRM, "confirm", timeout=3.0)
+            except MuseGenerationError:
+                raise MuseGenerationError("reset: muse did not accept this name (its confirm button stayed off); nothing was reset")
+            if not self._wait_js(self.page, "![...document.querySelectorAll('[role=dialog] input,[role=alertdialog] input')].length", 60.0):
+                raise MuseGenerationError("reset: confirm was clicked but its dialog did not close; check muse.ai")
+            time.sleep(3.0)
+            return {"ok": True, "dry": False}
+        finally:
+            self._close_page()
+
     @staticmethod
     def _parse_quota(txt: str) -> dict:
         """Parse English, traditional Chinese and simplified Chinese usage text."""
