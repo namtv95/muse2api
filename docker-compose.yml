@@ -2,7 +2,12 @@ version: '3.8'
 
 services:
   muse2api:
-    build: .
+    # Build with the upstream commit this branch contains, so the admin page compares the right one:
+    #   BUILD_SHA=$(git merge-base HEAD upstream/main) docker compose up -d --build
+    build:
+      context: .
+      args:
+        BUILD_SHA: ${BUILD_SHA:-}
     image: muse2api:latest
     container_name: muse2api
     restart: always
@@ -17,6 +22,8 @@ services:
       - MUSE2API_IMAGE_TIMEOUT=240
       - MUSE2API_VIDEO_TIMEOUT=600
       - MUSE2API_CHAT_TIMEOUT=300
+      # 1: the admin page's Upgrade button is off (it would overwrite this fork's code inside the container)
+      - MUSE2API_MANAGED_DEPLOYMENT=1
     volumes:
       # 持久化账号配置、任务日志及媒体文件
       - ./data:/app/data
