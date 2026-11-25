@@ -1604,12 +1604,89 @@ class MuseEngine:
         fresh = getattr(self.cfg, "fresh_chat", True)
         self.reset_thread(for_chat=not fresh)
         preamble = (getattr(self.cfg, "fresh_preamble", "") or "").strip() if fresh else ""
-        if preamble:
-            for _ in self._stream_reply(preamble, timeout, stop_event):
-                pass
-            if stop_event is not None and stop_event.is_set():
-                return
-        yield from self._stream_reply(prompt, timeout, stop_event)
+        try:
+            if preamble:
+                for _ in self._stream_reply(preamble, timeout, stop_event):
+                    pass
+                if stop_event is not None and stop_event.is_set():
+                    return
+            yield from self._stream_reply(prompt, timeout, stop_event)
+        finally:
+            # delete_chat (default on): a kept side chat reaches every later new chat through muse's own "Recent
+            # Chats" excerpt (measured: a planted code read back 2 of 2); deleted it did not (0 of 2). Also after a
+            # failure or a client that went away: the prompt is in that chat already.
+            if fresh and getattr(self.cfg, "delete_chat", True):
+                self._delete_current_thread()
+
+    # The open side chat's row in the side chat list (English UI of the headless browser)
+    _ROW_MENU_JS = """(function(){
+        var b = document.querySelector('[data-testid="hatch-thread-row"][aria-current="page"] button[aria-label="More thread actions"]');
+        if (!b) return false;
+        b.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, button: 0, pointerType: 'mouse'}));
+        return true;
+    })()"""
+    _MENU_DELETE_JS = """(function(){
+        var m = document.querySelector('[role=menu][data-state=open]');
+        var it = m && Array.from(m.querySelectorAll('[role=menuitem]')).find(function(e){ return /^Delete$/i.test(e.textContent.trim()); });
+        if (!it) return false;
+        it.click();
+        return true;
+    })()"""
+    _CONFIRM_DELETE_JS = """(function(){
+        var d = document.querySelector('[role=alertdialog],[role=dialog]');
+        var b = d && Array.from(d.querySelectorAll('button')).find(function(x){ return /^Delete$/i.test(x.textContent.trim()); });
+        if (!b) return false;
+        b.click();
+        return true;
+    })()"""
+    _DIALOG_GONE_JS = "!document.querySelector('[role=alertdialog],[role=dialog]')"
+    _ROW_GONE_JS = "!document.querySelector('[data-testid=\"hatch-thread-row\"][aria-current=\"page\"]')"
+    _SIDE_LIST_JS ="document.querySelectorAll('[data-testid=\"hatch-thread-row\"]').length > 0"
+
+    def _wait_js(self, p, script: str, seconds: float) -> bool:
+        t_end = time.time() + seconds
+        while not p.js(script):
+            if time.time() >= t_end:
+                return False
+            time.sleep(0.1)
+        return True
+
+    def _open_side_list(self, p, path: str) -> bool:
+        """A page that went straight to /thread/new has the side chat list closed (measured: 0 rows); one visit to the
+        main chat opens it and it stays open on later loads of that page. Open /, then the thread again."""
+        p.send("Page.navigate", {"url": "https://muse.ai/"})
+        if not self._wait_js(p, self._SIDE_LIST_JS, 10.0):
+            return False
+        p.send("Page.navigate", {"url": "https://muse.ai" + path})
+        return self._wait_js(p, self._ROW_MENU_JS, 10.0)
+
+    def _delete_current_thread(self) -> bool:
+        """Delete the open side chat (row menu -> Delete -> confirm Delete). Best effort: never raises, False if a step
+        is missing; the next request navigates to /thread/new anyway."""
+        p = self.page
+        if p is None:
+            return False
+        try:
+            path = p.js("location.pathname") or ""
+            if not path.startswith("/thread/") or path.rstrip("/").endswith("/new"):
+                return False
+            if not self._wait_js(p, self._ROW_MENU_JS, 1.0) and not self._open_side_list(p, path):
+                log.warning("删除对话未完成: no row for %s in the side chat list, now %s", path, p.js("location.pathname"))
+                return False
+            # "row gone": the delete goes out over muse's websocket after the click; navigating away before the row
+            # leaves the list cut it off (measured: 3 of 3 chats logged deleted were still there).
+            steps = (("menu Delete", self._MENU_DELETE_JS, 4.0), ("confirm Delete", self._CONFIRM_DELETE_JS, 4.0),
+                     ("dialog closed", self._DIALOG_GONE_JS, 4.0), ("row gone", self._ROW_GONE_JS, 8.0))
+            for step, script, seconds in steps:
+                if not self._wait_js(p, script, seconds):
+                    log.warning("删除对话未完成: step '%s' not found, path %s, now %s", step, path,
+                                p.js("location.pathname"))
+                    return False
+            log.info("已删除对话 %s", path)
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.warning("删除对话失败 %s", e)
+            return False
 
     def _stream_reply(self, prompt: str, timeout: int, stop_event=None):
         """Send one message in the current thread and yield its reply's new text (the old chat_stream body)."""

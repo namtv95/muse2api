@@ -114,6 +114,9 @@ class Config:
     fresh_chat: bool = field(default_factory=lambda: _env("MUSE2API_FRESH_CHAT", "1").strip().lower()
                              not in ("0", "false", "no", "off"))
     fresh_preamble: str = field(default_factory=lambda: _env("MUSE2API_FRESH_PREAMBLE", FRESH_PREAMBLE))
+    # delete that side chat once its reply is read (MUSE2API_DELETE_CHAT=0: keep it)
+    delete_chat: bool = field(default_factory=lambda: _env("MUSE2API_DELETE_CHAT", "1").strip().lower()
+                              not in ("0", "false", "no", "off"))
     max_concurrency: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_CONCURRENCY", "8"))))
 
     # 参考图输入默认只允许调用方直接提供数据和公网 URL。
