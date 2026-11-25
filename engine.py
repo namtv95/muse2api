@@ -668,6 +668,23 @@ class MuseEngine:
                 "cookies_exp": cur_exp,
             }
 
+    @staticmethod
+    def _layout_with_side_list(value: str) -> str:
+        """muse's layout_state cookie with the side chats shown as a panel (the rows _delete_current_thread needs), not
+        as a drop-down. A display preference; any other version or shape is returned unchanged."""
+        from urllib.parse import quote, unquote
+        try:
+            d = json.loads(unquote(value))
+            users = d["sideChatsByUser"]
+            if d.get("version") != 2 or not users or any(len(u) != 5 for u in users):
+                return value
+            new = [[u[0], True, True, False, False] for u in users]
+            if new == users:
+                return value
+            return quote(json.dumps({**d, "sideChatsByUser": new}, separators=(",", ":")), safe="")
+        except (ValueError, KeyError, TypeError):
+            return value
+
     def _apply_cookies(self, page: CDP, cookies: dict, expires: dict | None = None):
         """注入 cookie。彻底清空旧账号 cookie 保证隔离，且绝不传入过去时间的 expires 防止 Chromium 丢弃 hatch_vml。"""
         try:
@@ -678,6 +695,8 @@ class MuseEngine:
         for name, value in cookies.items():
             if not value:
                 continue
+            if name == "layout_state":
+                value = self._layout_with_side_list(value)
             exp = (expires or {}).get(name)
             try:
                 exp_val = float(exp) if exp and float(exp) > now + 3600 else (now + 7 * 86400)
@@ -1732,6 +1751,10 @@ class MuseEngine:
                 return False
             if not self._wait_js(p, self._ROW_MENU_JS, 1.0) and not self._open_side_list(p, path):
                 log.warning("删除对话未完成: no row for %s in the side chat list, now %s", path, p.js("location.pathname"))
+                log.warning("page controls: %s", p.js("""JSON.stringify({
+                    labels: Array.from(document.querySelectorAll('button[aria-label]')).map(function(b){ return b.getAttribute('aria-label'); }).slice(0, 40),
+                    ids: Array.from(new Set(Array.from(document.querySelectorAll('[data-testid]')).map(function(x){ return x.getAttribute('data-testid'); })))
+                        .filter(function(t){ return /side|thread|switch|panel|nav|leading/i.test(t); }).slice(0, 40)})"""))
                 return False
             # "row gone": the delete goes out over muse's websocket after the click; navigating away before the row
             # leaves the list cut it off (measured: 3 of 3 chats logged deleted were still there).
